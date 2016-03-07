@@ -604,3 +604,5 @@ class DPGMM(GMM):
         self._set_weights()
 
         return z
+    
+digamma(0)

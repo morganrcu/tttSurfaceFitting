@@ -19,7 +19,7 @@
 #include <vnl/algo/vnl_solve_qp.h>
 #include <vnl/vnl_matlab_filewrite.h>
 
-#include <cminpack.h>
+//#include <cminpack.h>
 #include <fstream>
 namespace ttt {
 template<class TInputImage,class TOutputMesh> class EllipsoidFittingCalculator: public itk::ImageToMeshFilter<TInputImage,TOutputMesh> {

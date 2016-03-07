@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 2.8)
 project (SurfaceFitting)
 
 
-include_directories(/usr/include/cminpack-1/)
+#include_directories(/usr/include/cminpack-1/)
 SET(CMAKE_BUILD_TYPE Debug)
 SET(CMAKE_CXX_STANDARD 14)
 find_package(ITK REQUIRED)
