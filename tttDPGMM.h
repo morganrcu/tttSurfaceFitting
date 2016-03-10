@@ -44,13 +44,15 @@ public:
 	};
 
 	DPGMM(int numberOfComponents = 1, CovarianceType covarianceType =
-			DPGMM_COVARIANCE_DIAG, double alpha = 1.0,unsigned maxIterations=100) {
+			DPGMM_COVARIANCE_DIAG, double alpha = 1.0,unsigned maxIterations=20) {
 		m_MaxIterations=maxIterations;
 		m_NumberOfComponents=numberOfComponents;
 		m_CovarianceType = covarianceType;
 		m_Alpha=alpha;
 		m_MaxIterations=maxIterations;
 		m_NumberOfKMeansIterations=10;
+		m_A0=1.0;
+		m_B0=1.0;
 
 
 	}
@@ -63,9 +65,9 @@ public:
 
 	VectorType sumRows(const MatrixType & matrix){
 		VectorType result(matrix.cols());
-
+		result.fill(0.0);
 		for(int c=0;c<matrix.cols();c++){
-			result[c]=matrix.get_column(c).sum();
+			result(c)=matrix.get_column(c).sum();
 		}
 		return result;
 	}
@@ -109,8 +111,9 @@ public:
 		return bound;
 	}
 
-	void updateMeans(const MatrixType & X, const VectorType & w,const MatrixType & z){
+	void updateMeans(const MatrixType & X, const MatrixType & z){
 		unsigned nFeatures = X.cols();
+
 		this->m_Means.set_size(nFeatures,this->m_NumberOfComponents);
 		this->m_Means.fill(0);
 
@@ -124,8 +127,8 @@ public:
 				num.fill(0);
 				double den=0;
 				for(int n=0;n<X.rows();n++){
-					num+= z(n,k)*w[n]*X.get_row(n);
-					den+= z(n,k)*w[n];
+					num+= z(n,k)*X.get_row(n);
+					den+= z(n,k);
 				}
 				den=this->m_Precisions[k](0,0)*den+1;
 
@@ -141,14 +144,14 @@ public:
 		}
 
 	}
-	void updateConcentration(const MatrixType & z,const VectorType & w){
+	void updateConcentration(const MatrixType & Z){
 
 		//VectorType sz = this->sumRows(z);
 
 		VectorType sz(this->m_NumberOfComponents);
 		sz.fill(0);
-		for(int n=0;n<w.size();n++){
-			sz+=w[n]*z.get_row(n);
+		for(int n=0;n<Z.rows();n++){
+			sz+=Z.get_row(n);
 		}
 
 		this->m_Gamma1= sz+1;
@@ -162,8 +165,7 @@ public:
 
 	}
 
-	void updatePrecisions(const MatrixType & X, const VectorType & w,const MatrixType & z){
-
+	void updatePrecisions(const MatrixType & X,const MatrixType & Z){
 		unsigned numFeatures = X.cols();
 
 		this->m_Scale.set_size(m_NumberOfComponents);
@@ -172,10 +174,11 @@ public:
 		switch(m_CovarianceType){
 		case DPGMM_COVARIANCE_SPHERICAL:
 		{
-			this->m_DOF = 0.5*numFeatures*this->sumRows(z);
+			this->m_DOF =m_A0 + 0.5*numFeatures*this->sumRows(Z);
 
 			for(int k=0;k<m_NumberOfComponents;k++){
-				this->m_Scale[k]=1;
+
+				this->m_Scale[k]=m_B0;
 
 				VectorType sumSqDiff(X.rows());
 				sumSqDiff.fill(0);
@@ -185,13 +188,15 @@ public:
 
 					sumSqDiff(n)=diff.apply(vnl_math_sqr).sum();
 				}
-				this->m_Scale[k]+=0.5*dot_product(element_product(z.get_column(k),w),(sumSqDiff+numFeatures));
+				this->m_Scale[k]+=0.5*dot_product(Z.get_column(k),(sumSqDiff+numFeatures));
 
 				this->m_Bounded_Precisions[k]=(0.5*numFeatures*(digamma(this->m_DOF[k])-std::log(this->m_Scale[k])));
 			}
 
 			for(int k=0;k<m_NumberOfComponents;k++){
 				this->m_Precisions[k](0,0)=this->m_DOF[k]/this->m_Scale[k];
+				std::cout << this->m_DOF[k]<< "/"<< this->m_Scale[k] << "=" << this->m_Precisions[k](0,0) << std::endl;
+
 			}
 			//  self.dof_ = 0.5 * n_features * np.sum(z, axis=0)
             //for k in range(self.n_components):
@@ -207,10 +212,10 @@ public:
 		}
 
 	}
-	void doMStep(const MatrixType & X, const VectorType & w, const MatrixType & z){
-		this->updateConcentration(z,w);
-		this->updateMeans(X,w,z);
-		this->updatePrecisions(X,w,z);
+	void doMStep(const MatrixType & X, const MatrixType & z){
+		this->updateConcentration(z);
+		this->updateMeans(X,z);
+		this->updatePrecisions(X,z);
 
 	}
 
@@ -265,8 +270,8 @@ public:
 			z.set_row(n,p.get_row(n)+dgamma);
 		}
 		z=logNormalize(z);
-		std::cout << "Z" << std::endl;
-		std::cout << z << std::endl;
+		//std::cout << "Z" << std::endl;
+		//std::cout << z << std::endl;
 		bound.set_size(m_NumberOfComponents);
 		bound.fill(0.0);
 		auto zp = element_product(z,p);
@@ -275,67 +280,158 @@ public:
 		}
 
 	}
-	void initializeGamma(){
+	void initializeGamma(const VectorType & w, const MatrixType & Z){
 		m_Gamma0.set_size(m_NumberOfComponents);
 		m_Gamma0.fill(m_Alpha);
-
+#if 0
 		m_Gamma1.set_size(m_NumberOfComponents);
 		m_Gamma1.fill(m_Alpha);
 
 		m_Gamma2.set_size(m_NumberOfComponents);
 		m_Gamma2.fill(m_Alpha);
+
+#endif
+#if 1
+		VectorType sz(this->m_NumberOfComponents);
+		sz.fill(0);
+		for(int n=0;n<w.size();n++){
+			sz+=w[n]*Z.get_row(n);
+		}
+
+		this->m_Gamma1= sz+1;
+		this->m_Gamma2.set_size(this->m_NumberOfComponents);
+		this->m_Gamma2.fill(0);
+
+		for(int k=m_NumberOfComponents-2;k>=0;k--){
+			this->m_Gamma2[k]=this->m_Gamma2[k+1]+sz[k];
+		}
+		this->m_Gamma2+= this->m_Alpha;
+#endif
 	}
-	void initializeMeans(const MatrixType & X,const VectorType & w){
+
+	void initZKMeans(const MatrixType & X, const VectorType & w, MatrixType & Z){
 
 		unsigned numSamples = X.rows();
 		unsigned numFeatures = X.cols();
 
+		Z.set_size(numSamples,this->m_NumberOfComponents);
+
+
 		vnl_vector<unsigned> assignments(numSamples);
 
-		vnl_random rng;
 		for(int n=0;n<numSamples;n++){
-			assignments[n]=rng(this->m_NumberOfComponents);
+			assignments[n]=m_RNG(this->m_NumberOfComponents);
 		}
 
-		this->m_Means.set_size(numFeatures,m_NumberOfComponents);
-		this->m_Means.fill(0);
-		vnl_vector<double> counts(m_NumberOfComponents);
-		counts.fill(0);
+		MatrixType centers(numFeatures,m_NumberOfComponents);
+
 		for(int it=0;it<m_NumberOfKMeansIterations;it++){
 
+			centers.fill(0);
 			//Compute centroids
+			vnl_vector<double> counts(m_NumberOfComponents);
+			counts.fill(0);
+
 			for(int n=0;n<numSamples;n++){
 				unsigned assignment = assignments[n];
-				this->m_Means.set_column(assignment,this->m_Means.get_column(assignment)+w[n]*X.get_row(assignment));
+				centers.set_column(assignment,centers.get_column(assignment)+w[n]*X.get_row(n));
 				counts[assignment]+=w[n];
 			}
+			//std::cout << counts << std::endl;
 
 			for(int k=0;k<m_NumberOfComponents;k++){
-				this->m_Means.set_column(k,this->m_Means.get_column(k)/counts[k]);
+				if(counts[k]>0){
+					centers.set_column(k,centers.get_column(k)/counts[k]);
+				}else{
+					for(int r=0;r<centers.rows();r++){
+						centers(r,k)=m_RNG.normal();
+					}
+				}
 			}
 
-			std::cout << m_Means << std::endl;
+			std::cout << centers << std::endl;
 
 			//Compute assignments
+			Z.fill(0.0);
 			for(int n=0;n<numSamples;n++){
 				VectorType distances(this->m_NumberOfComponents);
 				distances.fill(0);
 
 				for(int k=0;k<m_NumberOfComponents;k++){
-					distances[k]=(X.get_row(n)-this->m_Means.get_column(k)).magnitude();
+					distances[k]=(X.get_row(n)-centers.get_column(k)).magnitude();
 				}
 				assignments[n]=distances.arg_min();
+				Z(n,distances.arg_min())=1.0;
 			}
+		}
+	}
 
+	void initializeMeans(const MatrixType & X,const VectorType & w,const MatrixType & Z){
+		int numSamples = X.rows();
+		int numFeatures= X.cols();
+		this->m_Means.set_size(numFeatures,this->m_NumberOfComponents);
+		VectorType counts(this->m_NumberOfComponents);
+		counts.fill(0.0);
+		this->m_Means.fill(0);
+
+		for(int n=0;n<numSamples;n++){
+			for(int k=0;k<this->m_NumberOfComponents;k++){
+				this->m_Means.set_column(k,this->m_Means.get_column(k)+Z(n,k)*w[n]*X.get_row(n));
+				counts(k)+=Z(n,k)*w[n];
+			}
 		}
 
+
+		for(int k=0;k<m_NumberOfComponents;k++){
+			if(counts[k]>0){
+				this->m_Means.set_column(k,this->m_Means.get_column(k)/counts[k]);
+			}else{
+				for(int r=0;r<m_Means.rows();r++){
+					this->m_Means(r,k)=m_RNG.normal();
+				}
+			}
+		}
+		std::cout << "Init m_Means" << std::endl;
+		std::cout << this->m_Means << std::endl;
+
 	}
-	void initializePrecisions(const MatrixType & X){
+
+	void initializePrecisions(const MatrixType & X,const VectorType & w,const MatrixType & Z){
 		unsigned numFeatures =X.cols();
 
 		switch(m_CovarianceType){
 		case DPGMM_COVARIANCE_SPHERICAL:
+			this->m_DOF.set_size(this->m_NumberOfComponents);
+			this->m_DOF.fill(this->m_A0);
 
+			this->m_Scale.set_size(this->m_NumberOfComponents);
+			this->m_Scale.fill(this->m_B0);
+
+			this->m_Precisions.resize(this->m_NumberOfComponents);
+
+			std::for_each(m_Precisions.begin(),m_Precisions.end(),[](MatrixType & matrix){
+				matrix.set_size(1,1);
+				//matrix.fill(1.0);
+				matrix.fill(0);
+			});
+
+			for(int n=0;n<X.rows();n++){
+				for(int k=0;k<this->m_NumberOfComponents;k++){
+					auto diff = X.get_row(n) - this->m_Means.get_column(k);
+					this->m_Scale[k]+=Z(n,k)*w[n]*diff.apply(vnl_math_sqr).sum();
+					this->m_DOF[k]+=Z(n,k)*w[n];
+				}
+			}
+			for(int k=0;k<this->m_NumberOfComponents;k++){
+				this->m_Precisions[k](0,0)=this->m_DOF[k]/this->m_Scale[k];
+				std::cout << this->m_DOF[k]<< "/"<< this->m_Scale[k] << "=" << this->m_Precisions[k](0,0) << "\t";
+			}
+			std::cout << std::endl;
+			auto logScale = m_Scale.apply(std::log);
+			auto digammaDOF = digamma(m_DOF);
+			auto digmmaDOF_logScale= digammaDOF-logScale;
+			this->m_Bounded_Precisions=0.5*numFeatures*digmmaDOF_logScale;
+#if 0
 			this->m_DOF.set_size(this->m_NumberOfComponents);
 			this->m_DOF.fill(1.0);
 			this->m_Scale.set_size(this->m_NumberOfComponents);
@@ -344,7 +440,8 @@ public:
 
 			std::for_each(m_Precisions.begin(),m_Precisions.end(),[](MatrixType & matrix){
 				matrix.set_size(1,1);
-				matrix.fill(1.0);
+				//matrix.fill(1.0);
+				matrix.fill(100);
 			});
 
 			auto logScale = m_Scale.apply(std::log);
@@ -356,6 +453,7 @@ public:
 		    //self.scale_ = np.ones(self.n_components)
 		    //self.precs_ = np.ones((self.n_components, n_features))
 		    //self.bound_prec_ = 0.5 * n_features * ( digamma(self.dof_) - np.log(self.scale_))
+#endif
 		}
 	}
 	void initializeWeights(){
@@ -370,10 +468,13 @@ public:
 
 		m_InitialBound=-0.5*numFeatures*std::log(2*M_PI)- std::log(2*M_PI*M_E);
 
-		this->initializeGamma();
-		this->initializeMeans(X,w);
+		MatrixType Z;
+		this->initZKMeans(X,w,Z);
+
+		this->initializeGamma(w,Z);
+		this->initializeMeans(X,w,Z);
 		this->initializeWeights();
-		this->initializePrecisions(X);
+		this->initializePrecisions(X,w,Z);
 	}
 
 	double boundConcentration(){
@@ -446,14 +547,20 @@ public:
 			MatrixType z;
 			VectorType bound;
 			this->scoreSamples(X,currentLogprob,z,bound);
+			//std::cout << z << std::endl;
 			//FIXME double currentLogLikelihood=currentLogprob.mean() +this->logPrior(z)/z.size();
 			//std::cout << bound << std::endl;
 			//TODO check for convergence
 
-			this->doMStep(X,w,z);
+			for(int n=0;n<z.rows();n++){
+				z.set_row(n,z.get_row(n)*w[n]);
+			}
+			this->doMStep(X,z);
 
 			std::cout << "Mean:" << std::endl;
 			std::cout << this->m_Means << std::endl;
+			std::cout << "Gamma1" << std::endl;
+			std::cout << this->m_Gamma1 << std::endl;
 #if 0
 			std::cout << "Precisions:" << std::endl;
 			for(int k=0;k<m_NumberOfComponents;k++){
@@ -483,6 +590,9 @@ public:
 	MatrixType m_Means;
 
 
+
+	vnl_random m_RNG;
+
 	VectorType m_DOF;
 	VectorType m_Scale;
 	std::vector<MatrixType> m_Precisions;
@@ -490,6 +600,8 @@ public:
 
 	VectorType m_Weights;
 	double m_Alpha;
+	double m_A0;
+	double m_B0;
 
 	double m_InitialBound;
 };
